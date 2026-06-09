@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AgentPulse — Newsletter Agent</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box;}
+    html,body{height:100%;overflow:hidden;}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#07070f;color:#e2e8f0;}
+    ::-webkit-scrollbar{width:4px;}
+    ::-webkit-scrollbar-track{background:transparent;}
+    ::-webkit-scrollbar-thumb{background:#6366f1;border-radius:2px;}
+    @keyframes bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.25}}
+    @keyframes fillBar{from{width:0}to{width:var(--w)}}
+    @keyframes glow{0%,100%{box-shadow:0 0 6px rgba(99,102,241,0.4)}50%{box-shadow:0 0 18px rgba(99,102,241,0.8)}}
+  </style>
+</head>
+<body>
+<div id="root" style="height:100%;display:flex;flex-direction:column;"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const API = "http://localhost:8000";
+
+const TOPICS = [
+  { label:"🤖 AI Agents",      goal:"Create a weekly newsletter on latest AI agent news and send it to our subscribers." },
+  { label:"🔐 Cybersecurity",  goal:"Create a weekly newsletter on the latest cybersecurity threats and innovations." },
+  { label:"🚀 Startups",       goal:"Create a weekly newsletter covering the most exciting startup launches and funding news." },
+  { label:"🌐 Web3 & Crypto",  goal:"Create a weekly newsletter on the latest Web3, blockchain and crypto developments." },
+  { label:"🧬 AI Healthcare",  goal:"Create a weekly newsletter on AI breakthroughs in healthcare and medicine." },
+  { label:"✍️ Custom",         goal:"" },
+];
+
+const STEPS = ["Planner","Researcher","Summarizer","Writer","Critic","Improver","Publisher"];
+const STEP_ICONS   = {Planner:"🧠",Researcher:"🔍",Summarizer:"📝",Writer:"✍️",Critic:"🔎",Improver:"🚀",Publisher:"📤"};
+const STEP_COLORS  = {Planner:"#818cf8",Researcher:"#38bdf8",Summarizer:"#34d399",Writer:"#fb923c",Critic:"#e879f9",Improver:"#facc15",Publisher:"#4ade80"};
+const STEP_DESC    = {
+  Planner:   "Planning research strategy",
+  Researcher:"Searching web for articles",
+  Summarizer:"Curating top 6 stories",
+  Writer:    "Generating HTML newsletter",
+  Critic:    "Self-evaluating quality",
+  Improver:  "Applying improvements",
+  Publisher: "Saving & simulating send",
+};
+
+/* ── tiny helpers ── */
+function TypingDots({color="#6366f1"}){
+  return(
+    <span style={{display:"inline-flex",gap:3,alignItems:"center",marginLeft:5}}>
+      {[0,1,2].map(i=>(
+        <span key={i} style={{width:4,height:4,borderRadius:"50%",background:color,
+          animation:`bounce 1.2s ${i*0.2}s infinite`,display:"inline-block"}}/>
+      ))}
+    </span>
+  );
+}
+
+function Badge({status}){
+  const m={
+    queued: {c:"#94a3b8",bg:"rgba(148,163,184,0.12)",t:"⏳ Queued"},
+    running:{c:"#fbbf24",bg:"rgba(251,191,36,0.12)", t:"⚡ Running"},
+    completed:{c:"#34d399",bg:"rgba(52,211,153,0.12)",t:"✅ Completed"},
+    failed:{c:"#f87171",bg:"rgba(248,113,113,0.12)",t:"❌ Failed"},
+  };
+  const s=m[status]||m.queued;
+  return <span style={{padding:"3px 12px",borderRadius:20,fontSize:11,fontWeight:700,
+    color:s.c,background:s.bg,border:`1px solid ${s.c}55`,letterSpacing:.3}}>{s.t}</span>;
+}
+
+function MiniStat({icon,label,value,color}){
+  return(
+    <div style={{flex:1,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",
+      borderRadius:12,padding:"12px 10px",textAlign:"center",minWidth:90}}>
+      <div style={{fontSize:20,marginBottom:5}}>{icon}</div>
+      <div style={{fontSize:19,fontWeight:800,color,lineHeight:1,marginBottom:3}}>{value}</div>
+      <div style={{fontSize:10,color:"#64748b",fontWeight:500}}>{label}</div>
+    </div>
+  );
+}
+
+function App(){
+  const [topicIdx,setTopicIdx]  = useState(0);
+  const [goal,setGoal]          = useState(TOPICS[0].goal);
+  const [mode,setMode]          = useState("auto");
+  const [jobId,setJobId]        = useState(null);
+  const [status,setStatus]      = useState(null);
+  const [loading,setLoading]    = useState(false);
+  const [activeTab,setActiveTab]= useState("logs");
+  const [mainTab,setMainTab]    = useState("agent");
+  const [analytics,setAnalytics]= useState(null);
+  const [history,setHistory]    = useState([]);
+  const pollRef   = useRef(null);
+  const logsEndRef= useRef(null);
+
+  useEffect(()=>{ logsEndRef.current?.scrollIntoView({behavior:"smooth"}); },[status?.steps_log]);
+  useEffect(()=>{ fetchAnalytics(); return()=>clearInterval(pollRef.current); },[]);
+
+  const fetchAnalytics=async()=>{
+    try{ const r=await fetch(`${API}/analytics`); const d=await r.json();
+      setAnalytics(d); setHistory(d.history||[]); }catch(e){}
+  };
+
+  const selectTopic=(i)=>{
+    setTopicIdx(i);
+    setGoal(TOPICS[i].label==="✍️ Custom"?"":TOPICS[i].goal);
+  };
+
+  const startAgent=async()=>{
+    setLoading(true); setStatus(null); setJobId(null); setActiveTab("logs");
+    try{
+      const res=await fetch(`${API}/run`,{method:"POST",
+        headers:{"Content-Type":"application/json"},body:JSON.stringify({goal,mode})});
+      const data=await res.json();
+      setJobId(data.job_id); setStatus(data);
+      pollRef.current=setInterval(async()=>{
+        const r=await fetch(`${API}/status/${data.job_id}`);
+        const d=await r.json(); setStatus(d);
+        if(d.status==="completed"||d.status==="failed"){
+          clearInterval(pollRef.current); setLoading(false);
+          if(d.status==="completed"){ setActiveTab("preview"); fetchAnalytics(); }
+        }
+      },1500);
+    }catch(e){ setLoading(false); alert("❌ Backend not reachable. Run python run.py first."); }
+  };
+
+  const downloadNewsletter=()=>{
+    const html=cleanedHTML(status?.newsletter_preview||"");
+    if(!html)return;
+    const blob=new Blob([html],{type:"text/html"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url; a.download=`agentpulse_${jobId}.html`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const cleanedHTML=(raw)=>raw
+    .replace(/^```html\s*/i,"").replace(/^```\s*/,"").replace(/```\s*$/,"").trim();
+
+  const getStep=(s)=>{
+    const logs=status?.steps_log||[];
+    const isDone   =logs.some(l=>l.startsWith("✅")&&l.toUpperCase().includes(s.toUpperCase()));
+    const isRunning=logs.some(l=>l.startsWith("⏳")&&l.toUpperCase().includes(s.toUpperCase()));
+    return{isDone,isRunning};
+  };
+
+  const doneCount=(status?.steps_log||[]).filter(l=>l.startsWith("✅")).length;
+  const pct=Math.round((doneCount/7)*100);
+  const preview=cleanedHTML(status?.newsletter_preview||"");
+  const wordCount=preview.replace(/<[^>]+>/g,"").split(/\s+/).filter(Boolean).length;
+  const readTime =Math.max(1,Math.round(wordCount/200));
+
+  /* ══════════════════════════════════════════
+     RENDER
+  ══════════════════════════════════════════ */
+  return(
+    <div style={{display:"flex",flexDirection:"column",height:"100vh",background:"#07070f",overflow:"hidden"}}>
+
+      {/* ── HEADER (fixed height) ── */}
+      <header style={{flexShrink:0,background:"linear-gradient(135deg,#0d0d1a 0%,#111128 100%)",
+        borderBottom:"1px solid rgba(99,102,241,0.2)",padding:"0 28px",height:54,
+        display:"flex",alignItems:"center",justifyContent:"space-between",gap:16}}>
+
+        <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+          <div style={{width:34,height:34,borderRadius:9,
+            background:"linear-gradient(135deg,#6366f1,#8b5cf6)",
+            display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}}>⚡</div>
+          <div>
+            <div style={{fontSize:15,fontWeight:700,color:"#f1f5f9",lineHeight:1.1}}>AgentPulse</div>
+            <div style={{fontSize:9,color:"#6366f1",fontWeight:600,letterSpacing:.5}}>AUTONOMOUS NEWSLETTER AGENT</div>
+          </div>
+        </div>
+
+        <nav style={{display:"flex",gap:3,background:"rgba(255,255,255,0.04)",
+          padding:3,borderRadius:10,border:"1px solid rgba(255,255,255,0.07)"}}>
+          {[["agent","🤖 Agent"],["analytics","📊 Analytics"],["history","📁 History"]].map(([t,l])=>(
+            <button key={t} onClick={()=>setMainTab(t)} style={{
+              padding:"6px 16px",borderRadius:7,border:mainTab===t?"1px solid rgba(99,102,241,0.4)":"1px solid transparent",
+              cursor:"pointer",fontSize:12,fontWeight:600,transition:"all .2s",
+              background:mainTab===t?"rgba(99,102,241,0.25)":"transparent",
+              color:mainTab===t?"#a5b4fc":"#475569"}}>
+              {l}
+            </button>
+          ))}
+        </nav>
+
+        <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+          {analytics?.total_runs>0&&(
+            <span style={{fontSize:11,color:"#34d399",background:"rgba(52,211,153,0.1)",
+              padding:"3px 10px",borderRadius:20,border:"1px solid rgba(52,211,153,0.22)"}}>
+              {analytics.total_runs} runs total
+            </span>
+          )}
+          <span style={{background:"rgba(99,102,241,0.15)",border:"1px solid rgba(99,102,241,0.3)",
+            color:"#a5b4fc",padding:"4px 12px",borderRadius:20,fontSize:11,fontWeight:600}}>
+            LangGraph + Groq LLaMA 3.3
+          </span>
+        </div>
+      </header>
+
+      {/* ── BODY (fills remaining height) ── */}
+      <div style={{flex:1,overflow:"hidden",padding:"14px 16px"}}>
+
+        {/* ══ AGENT TAB ══ */}
+        {mainTab==="agent"&&(
+          <div style={{display:"grid",gridTemplateColumns:"260px 300px 1fr",gap:14,height:"100%"}}>
+
+            {/* ═══ COL 1 : PIPELINE ═══ */}
+            <div style={{display:"flex",flexDirection:"column",gap:10,overflow:"auto"}}>
+
+              <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",
+                borderRadius:14,padding:"16px 14px",flex:"none"}}>
+
+                <div style={{fontSize:9,fontWeight:700,color:"#475569",letterSpacing:1.4,
+                  textTransform:"uppercase",marginBottom:12}}>🗺️ Pipeline</div>
+
+                {/* progress bar */}
+                <div style={{marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                    <span style={{fontSize:10,color:"#475569"}}>Progress</span>
+                    <span style={{fontSize:10,color:"#818cf8",fontWeight:700}}>{doneCount}/7 · {pct}%</span>
+                  </div>
+                  <div style={{height:5,background:"rgba(255,255,255,0.07)",borderRadius:3,overflow:"hidden"}}>
+                    <div style={{height:"100%",width:`${pct}%`,borderRadius:3,transition:"width .7s ease",
+                      background:"linear-gradient(90deg,#6366f1,#8b5cf6,#06b6d4)"}}/>
+                  </div>
+                </div>
+
+                {/* steps */}
+                {STEPS.map((step,i)=>{
+                  const{isDone,isRunning}=getStep(step);
+                  const accent=STEP_COLORS[step];
+                  return(
+                    <div key={i} style={{
+                      display:"flex",alignItems:"center",gap:10,
+                      padding:"9px 11px",borderRadius:10,marginBottom:6,transition:"all .35s",
+                      background:isDone?`${accent}18`:isRunning?`${accent}12`:"rgba(255,255,255,0.02)",
+                      border:`1px solid ${isDone?`${accent}45`:isRunning?`${accent}45`:"rgba(255,255,255,0.06)"}`
+                    }}>
+                      {/* icon bubble */}
+                      <div style={{width:32,height:32,borderRadius:9,flexShrink:0,
+                        display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,
+                        background:isDone?`${accent}28`:isRunning?`${accent}20`:"rgba(255,255,255,0.05)",
+                        border:`1px solid ${isDone?`${accent}55`:isRunning?`${accent}55`:"rgba(255,255,255,0.09)"}`,
+                        boxShadow:isRunning?`0 0 12px ${accent}50`:isDone?`0 0 8px ${accent}30`:"none",
+                        transition:"all .35s"}}>
+                        {STEP_ICONS[step]}
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:12,fontWeight:isDone||isRunning?700:400,
+                          color:isDone?accent:isRunning?accent:"#374151",
+                          display:"flex",alignItems:"center",transition:"color .3s"}}>
+                          {step}{isRunning&&<TypingDots color={accent}/>}
+                        </div>
+                        <div style={{fontSize:9,color:isDone?`${accent}cc`:isRunning?`${accent}99`:"#1e293b",marginTop:1}}>
+                          {isDone?"✓ Complete":isRunning?"In progress…":STEP_DESC[step]}
+                        </div>
+                      </div>
+                      <div style={{flexShrink:0,fontSize:13}}>
+                        {isDone   &&<span style={{color:"#34d399",fontWeight:700}}>✓</span>}
+                        {isRunning&&<span style={{color:accent,animation:"pulse 1s infinite",fontSize:9}}>●</span>}
+                        {!isDone&&!isRunning&&<span style={{color:"#1e293b",fontSize:9}}>○</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* completion banner */}
+                {status?.status==="completed"&&(
+                  <div style={{marginTop:8,padding:"10px 12px",borderRadius:10,
+                    background:"rgba(52,211,153,0.08)",border:"1px solid rgba(52,211,153,0.25)",
+                    animation:"fadeUp .5s ease"}}>
+                    <div style={{fontSize:12,color:"#34d399",fontWeight:700}}>🎉 Pipeline Complete!</div>
+                    <div style={{fontSize:9,color:"#065f46",marginTop:2}}>Saved to outputs/ folder</div>
+                  </div>
+                )}
+              </div>
+
+              {/* ── run stats (shown after completion, fills remaining column space) ── */}
+              {status?.status==="completed"&&(
+                <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",
+                  borderRadius:14,padding:"16px 14px",animation:"fadeUp .5s ease"}}>
+                  <div style={{fontSize:9,fontWeight:700,color:"#475569",letterSpacing:1.4,
+                    textTransform:"uppercase",marginBottom:12}}>📊 Run Stats</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                    <MiniStat icon="📰" label="Stories"     value="6"      color="#818cf8"/>
+                    <MiniStat icon="👥" label="Subscribers" value="1,247"  color="#34d399"/>
+                    <MiniStat icon="📝" label="Words"       value={wordCount} color="#22d3ee"/>
+                    <MiniStat icon="⏱️" label="Read Time"  value={`~${readTime}m`} color="#a78bfa"/>
+                  </div>
+                  <button onClick={downloadNewsletter} style={{
+                    width:"100%",background:"rgba(52,211,153,0.15)",
+                    border:"1px solid rgba(52,211,153,0.35)",color:"#34d399",
+                    padding:"9px 0",borderRadius:9,cursor:"pointer",
+                    fontSize:12,fontWeight:700,transition:"all .2s",letterSpacing:.2
+                  }}>⬇️ Download Newsletter HTML</button>
+                </div>
+              )}
+            </div>
+
+            {/* ═══ COL 2 : CONFIG ═══ */}
+            <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",
+              borderRadius:14,padding:"16px 14px",overflow:"auto",display:"flex",flexDirection:"column",gap:14}}>
+
+              {/* topic */}
+              <div>
+                <div style={{fontSize:9,fontWeight:700,color:"#475569",letterSpacing:1.4,
+                  textTransform:"uppercase",marginBottom:9}}>🎯 Topic</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  {TOPICS.map((t,i)=>(
+                    <button key={i} onClick={()=>selectTopic(i)} style={{
+                      padding:"5px 11px",borderRadius:20,cursor:"pointer",fontSize:11,
+                      fontWeight:500,transition:"all .2s",border:"1px solid",
+                      background:topicIdx===i?"rgba(99,102,241,0.22)":"transparent",
+                      color:topicIdx===i?"#a5b4fc":"#475569",
+                      borderColor:topicIdx===i?"rgba(99,102,241,0.55)":"rgba(255,255,255,0.09)"}}>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* goal */}
+              <div style={{flex:1}}>
+                <div style={{fontSize:9,fontWeight:700,color:"#475569",letterSpacing:1.4,
+                  textTransform:"uppercase",marginBottom:7}}>📝 Goal</div>
+                <textarea value={goal} onChange={e=>setGoal(e.target.value)}
+                  placeholder="Describe your newsletter goal…"
+                  style={{width:"100%",height:110,background:"rgba(255,255,255,0.04)",
+                    border:"1px solid rgba(99,102,241,0.28)",borderRadius:9,
+                    color:"#f1f5f9",padding:10,fontSize:12,resize:"none",
+                    fontFamily:"inherit",lineHeight:1.65,outline:"none"}}/>
+              </div>
+
+              {/* mode */}
+              <div>
+                <div style={{fontSize:9,fontWeight:700,color:"#475569",letterSpacing:1.4,
+                  textTransform:"uppercase",marginBottom:8}}>🔄 Mode</div>
+                <div style={{display:"flex",gap:7,marginBottom:6}}>
+                  {["auto","hitl"].map(m=>(
+                    <button key={m} onClick={()=>setMode(m)} style={{
+                      flex:1,padding:"9px 0",borderRadius:9,border:"none",cursor:"pointer",
+                      fontWeight:600,fontSize:11,transition:"all .2s",
+                      background:mode===m?"linear-gradient(135deg,#6366f1,#8b5cf6)":"rgba(255,255,255,0.05)",
+                      color:mode===m?"white":"#475569",
+                      boxShadow:mode===m?"0 4px 14px rgba(99,102,241,0.32)":"none"}}>
+                      {m==="auto"?"🤖 Fully Auto":"🙋 Human-in-Loop"}
+                    </button>
+                  ))}
+                </div>
+                <p style={{fontSize:10,color:"#334155",lineHeight:1.5}}>
+                  {mode==="auto"?"Runs end-to-end without interruption.":"Pauses for your approval after the Critic step."}
+                </p>
+              </div>
+
+              {/* run button */}
+              <button onClick={startAgent} disabled={loading||!goal.trim()} style={{
+                width:"100%",border:"none",padding:"13px 0",borderRadius:11,
+                fontSize:13,fontWeight:700,cursor:loading||!goal.trim()?"not-allowed":"pointer",
+                transition:"all .2s",opacity:!goal.trim()?.45:1,
+                background:loading?"rgba(99,102,241,0.5)":"linear-gradient(135deg,#6366f1,#8b5cf6)",
+                color:"white",boxShadow:loading?"none":"0 4px 22px rgba(99,102,241,0.42)",letterSpacing:.3
+              }}>
+                {loading
+                  ?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                    <span style={{width:13,height:13,border:"2px solid rgba(255,255,255,0.3)",
+                      borderTopColor:"white",borderRadius:"50%",animation:"spin .8s linear infinite",
+                      display:"inline-block"}}/>Agent Running…
+                   </span>
+                  :"🚀 Run Newsletter Agent"}
+              </button>
+            </div>
+
+            {/* ═══ COL 3 : RESULTS ═══ */}
+            <div style={{display:"flex",flexDirection:"column",gap:10,overflow:"hidden",minWidth:0}}>
+
+              {/* empty state */}
+              {!status&&!loading&&(
+                <div style={{flex:1,display:"flex",flexDirection:"column",
+                  alignItems:"center",justifyContent:"center",
+                  background:"rgba(255,255,255,0.015)",
+                  border:"1px dashed rgba(255,255,255,0.07)",borderRadius:14}}>
+                  <div style={{fontSize:48,marginBottom:12}}>⚡</div>
+                  <div style={{fontSize:17,fontWeight:700,color:"#1e293b",marginBottom:5}}>Ready to Launch</div>
+                  <div style={{fontSize:12,color:"#0f172a",marginBottom:22}}>Choose a topic and hit Run</div>
+                  <div style={{display:"flex",gap:7,flexWrap:"wrap",justifyContent:"center",maxWidth:420}}>
+                    {STEPS.map((s,i)=>(
+                      <span key={i} style={{fontSize:11,padding:"4px 12px",borderRadius:20,
+                        background:"rgba(99,102,241,0.1)",color:"#475569",
+                        border:"1px solid rgba(99,102,241,0.15)"}}>
+                        {STEP_ICONS[s]} {s}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {status&&(
+                <>
+                  {/* top status bar */}
+                  <div style={{flexShrink:0,background:"rgba(255,255,255,0.03)",
+                    border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,
+                    padding:"10px 14px",display:"flex",alignItems:"center",
+                    justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <Badge status={status.status}/>
+                      <span style={{fontSize:11,color:"#374151"}}>Job #{jobId}</span>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                      {status.subject_line&&(
+                        <span style={{fontSize:11,color:"#818cf8",background:"rgba(99,102,241,0.1)",
+                          padding:"3px 10px",borderRadius:20,maxWidth:340,overflow:"hidden",
+                          textOverflow:"ellipsis",whiteSpace:"nowrap",
+                          border:"1px solid rgba(99,102,241,0.22)"}}>
+                          📧 {status.subject_line}
+                        </span>
+                      )}
+                      {status.status==="completed"&&(
+                        <button onClick={downloadNewsletter} style={{
+                          background:"linear-gradient(135deg,#059669,#10b981)",border:"none",
+                          color:"white",padding:"5px 14px",borderRadius:20,
+                          cursor:"pointer",fontSize:11,fontWeight:700,letterSpacing:.2}}>
+                          ⬇️ Download HTML
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* stat row (completed only) */}
+                  {status.status==="completed"&&(
+                    <div style={{flexShrink:0,display:"flex",gap:10,animation:"fadeUp .5s ease"}}>
+                      <MiniStat icon="📰" label="Stories Featured"  value="6"          color="#818cf8"/>
+                      <MiniStat icon="⏱️" label="Reading Time"     value={`~${readTime} min`} color="#a78bfa"/>
+                      <MiniStat icon="📊" label="Word Count"        value={wordCount}   color="#22d3ee"/>
+                      <MiniStat icon="👥" label="Subscribers"       value="1,247"       color="#34d399"/>
+                    </div>
+                  )}
+
+                  {/* main panel: tabs + content — fills remaining height */}
+                  <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",
+                    background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",
+                    borderRadius:14}}>
+
+                    {/* tab bar */}
+                    <div style={{flexShrink:0,display:"flex",gap:6,padding:"10px 14px",
+                      borderBottom:"1px solid rgba(255,255,255,0.07)",
+                      background:"rgba(255,255,255,0.02)"}}>
+                      {[["logs","📋 Agent Logs"],["preview","📰 Newsletter Preview"],["send_log","📤 Send Report"]].map(([t,l])=>(
+                        <button key={t} onClick={()=>setActiveTab(t)} style={{
+                          padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",
+                          fontSize:12,fontWeight:activeTab===t?600:400,transition:"all .2s",
+                          background:activeTab===t?"rgba(99,102,241,0.22)":"transparent",
+                          color:activeTab===t?"#a5b4fc":"#374151",
+                          outline:activeTab===t?"1px solid rgba(99,102,241,0.35)":"none"}}>
+                          {l}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* tab content — this div is the scrollable/resizable area */}
+                    <div style={{flex:1,overflow:"auto",padding:14}}>
+
+                      {/* LOGS */}
+                      {activeTab==="logs"&&(
+                        <div>
+                          {(status.steps_log||[]).length===0&&(
+                            <div style={{color:"#374151",fontSize:13,textAlign:"center",padding:50}}>
+                              Agent initializing<TypingDots color="#6366f1"/>
+                            </div>
+                          )}
+                          {(status.steps_log||[]).map((log,i)=>{
+                            const isR=log.startsWith("⏳");
+                            const isD=log.startsWith("✅");
+                            const sn=STEPS.find(s=>log.toUpperCase().includes(s.toUpperCase()));
+                            const icon=sn?STEP_ICONS[sn]:"⚙️";
+                            const accent=sn?STEP_COLORS[sn]:"#6366f1";
+                            return(
+                              <div key={i} style={{
+                                display:"flex",alignItems:"center",gap:10,
+                                padding:"9px 13px",borderRadius:10,marginBottom:6,
+                                animation:"fadeUp .35s ease",
+                                background:isD?`${accent}11`:isR?`${accent}0c`:"rgba(255,255,255,0.02)",
+                                border:`1px solid ${isD?`${accent}35`:isR?`${accent}30`:"rgba(255,255,255,0.05)"}`}}>
+                                <span style={{fontSize:15}}>{icon}</span>
+                                <span style={{flex:1,fontSize:12,color:isD?accent:isR?"#fbbf24":"#94a3b8"}}>
+                                  {log.replace("⏳ Running: ","").replace("✅ ","")}{isR&&<TypingDots color="#fbbf24"/>}
+                                </span>
+                                <span style={{fontSize:10,padding:"2px 7px",borderRadius:20,
+                                  background:isD?`${accent}22`:"rgba(251,191,36,0.15)",
+                                  color:isD?accent:"#fbbf24"}}>
+                                  {isD?"done":"running"}
+                                </span>
+                              </div>
+                            );
+                          })}
+                          {loading&&(
+                            <div style={{padding:"9px 13px",borderRadius:10,
+                              background:"rgba(251,191,36,0.05)",border:"1px solid rgba(251,191,36,0.15)",
+                              color:"#fbbf24",fontSize:12,display:"flex",alignItems:"center"}}>
+                              ⏳ Agent processing<TypingDots color="#fbbf24"/>
+                            </div>
+                          )}
+                          <div ref={logsEndRef}/>
+                        </div>
+                      )}
+
+                      {/* PREVIEW — fills the full panel height */}
+                      {activeTab==="preview"&&(
+                        <div style={{height:"100%",display:"flex",flexDirection:"column",gap:8}}>
+                          {preview?(
+                            <>
+                              <div style={{flexShrink:0,padding:"7px 12px",
+                                background:"rgba(52,211,153,0.07)",border:"1px solid rgba(52,211,153,0.2)",
+                                borderRadius:8,fontSize:11,color:"#34d399",
+                                display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                                <span>✅ Saved to <code style={{background:"rgba(255,255,255,0.08)",
+                                  padding:"1px 5px",borderRadius:4}}>outputs/</code> folder</span>
+                                <button onClick={downloadNewsletter} style={{
+                                  background:"rgba(52,211,153,0.2)",border:"1px solid rgba(52,211,153,0.4)",
+                                  color:"#34d399",padding:"3px 10px",borderRadius:7,
+                                  cursor:"pointer",fontSize:11,fontWeight:700}}>⬇️ Download</button>
+                              </div>
+                              <iframe srcDoc={preview} title="Newsletter Preview"
+                                style={{flex:1,border:"none",borderRadius:10,background:"white",minHeight:0}}/>
+                            </>
+                          ):(
+                            <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",
+                              color:"#1e293b",fontSize:13}}>
+                              Newsletter will appear here after generation…
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* SEND LOG */}
+                      {activeTab==="send_log"&&(
+                        <div>
+                          {status.send_log?(
+                            <pre style={{background:"rgba(0,0,0,0.3)",
+                              border:"1px solid rgba(52,211,153,0.22)",borderRadius:10,
+                              padding:18,fontSize:12,color:"#34d399",
+                              whiteSpace:"pre-wrap",lineHeight:2}}>
+                              {status.send_log}
+                            </pre>
+                          ):(
+                            <div style={{textAlign:"center",padding:60,color:"#1e293b",fontSize:13}}>
+                              Send report will appear after publishing…
+                            </div>
+                          )}
+                          {status.error&&(
+                            <pre style={{marginTop:10,background:"rgba(248,113,113,0.07)",
+                              border:"1px solid rgba(248,113,113,0.22)",borderRadius:10,
+                              padding:16,fontSize:11,color:"#f87171",whiteSpace:"pre-wrap"}}>
+                              ❌ {status.error}
+                            </pre>
+                          )}
+                        </div>
+                      )}
+
+                    </div>{/* end tab content */}
+                  </div>{/* end main panel */}
+                </>
+              )}
+            </div>{/* end col 3 */}
+
+          </div>
+        )}{/* end agent tab */}
+
+        {/* ══ ANALYTICS TAB ══ */}
+        {mainTab==="analytics"&&(
+          <div style={{height:"100%",overflow:"auto"}}>
+            <div style={{marginBottom:18}}>
+              <div style={{fontSize:20,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>📊 Analytics Dashboard</div>
+              <div style={{fontSize:13,color:"#475569"}}>Performance metrics across all newsletter runs</div>
+            </div>
+            {!analytics||analytics.total_runs===0?(
+              <div style={{textAlign:"center",padding:80,
+                background:"rgba(255,255,255,0.02)",border:"1px dashed rgba(255,255,255,0.06)",
+                borderRadius:16,color:"#374151",fontSize:14}}>
+                No runs yet — run the agent first!
+              </div>
+            ):(
+              <>
+                <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+                  <MiniStat icon="🚀" label="Total Runs"         value={analytics.total_runs}               color="#6366f1"/>
+                  <MiniStat icon="⭐" label="Avg Quality"        value={`${analytics.avg_quality_score}/10`} color="#f59e0b"/>
+                  <MiniStat icon="📝" label="Avg Words"          value={analytics.avg_word_count}            color="#06b6d4"/>
+                  <MiniStat icon="⏱️" label="Avg Read Time"     value={`${analytics.avg_reading_time_mins}m`} color="#8b5cf6"/>
+                  <MiniStat icon="🔍" label="Articles Researched" value={analytics.total_articles_researched} color="#34d399"/>
+                </div>
+                <div style={{background:"rgba(255,255,255,0.025)",border:"1px solid rgba(255,255,255,0.08)",
+                  borderRadius:14,padding:20}}>
+                  <div style={{fontSize:13,fontWeight:600,color:"#64748b",marginBottom:14}}>📈 All Runs</div>
+                  {(analytics.history||[]).map((h,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"center",gap:14,
+                      padding:"12px 16px",borderRadius:10,marginBottom:8,
+                      background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.05)"}}>
+                      <div style={{width:30,height:30,borderRadius:8,flexShrink:0,
+                        background:"rgba(99,102,241,0.2)",display:"flex",alignItems:"center",
+                        justifyContent:"center",fontSize:11,fontWeight:700,color:"#818cf8"}}>
+                        #{i+1}
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,color:"#e2e8f0",fontWeight:500,
+                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {h.subject_line||"Untitled"}
+                        </div>
+                        <div style={{fontSize:10,color:"#475569",marginTop:2}}>
+                          {new Date(h.timestamp).toLocaleString()} · {h.word_count} words · {h.reading_time} min read
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:7}}>
+                        {h.critique_score>0&&(
+                          <span style={{fontSize:11,padding:"2px 8px",borderRadius:20,
+                            background:"rgba(245,158,11,0.15)",color:"#f59e0b",
+                            border:"1px solid rgba(245,158,11,0.3)"}}>⭐ {h.critique_score}/10</span>
+                        )}
+                        <span style={{fontSize:11,padding:"2px 8px",borderRadius:20,
+                          background:"rgba(52,211,153,0.1)",color:"#34d399",
+                          border:"1px solid rgba(52,211,153,0.2)"}}>✅ done</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ══ HISTORY TAB ══ */}
+        {mainTab==="history"&&(
+          <div style={{height:"100%",overflow:"auto"}}>
+            <div style={{marginBottom:18}}>
+              <div style={{fontSize:20,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>📁 Newsletter History</div>
+              <div style={{fontSize:13,color:"#475569"}}>All generated newsletters saved locally</div>
+            </div>
+            {history.length===0?(
+              <div style={{textAlign:"center",padding:80,
+                background:"rgba(255,255,255,0.02)",border:"1px dashed rgba(255,255,255,0.06)",
+                borderRadius:16,color:"#374151",fontSize:14}}>
+                No newsletters yet — run the agent first!
+              </div>
+            ):(
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))",gap:14}}>
+                {history.map((h,i)=>(
+                  <div key={i} style={{background:"rgba(255,255,255,0.025)",
+                    border:"1px solid rgba(255,255,255,0.07)",borderRadius:14,padding:18,
+                    transition:"all .2s",cursor:"default"}}
+                    onMouseEnter={e=>{e.currentTarget.style.borderColor="rgba(99,102,241,0.45)";
+                      e.currentTarget.style.transform="translateY(-2px)";}}
+                    onMouseLeave={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.07)";
+                      e.currentTarget.style.transform="none";}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                      <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,
+                        background:"rgba(99,102,241,0.15)",color:"#818cf8",fontWeight:700}}>#{h.id}</span>
+                      {h.critique_score>0&&(
+                        <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,
+                          background:"rgba(245,158,11,0.12)",color:"#f59e0b"}}>⭐ {h.critique_score}/10</span>
+                      )}
+                    </div>
+                    <div style={{fontSize:13,fontWeight:600,color:"#e2e8f0",marginBottom:8,lineHeight:1.4}}>
+                      {h.subject_line||"Untitled Newsletter"}
+                    </div>
+                    <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:10}}>
+                      {[
+                        [`📰 ${h.stories_featured} stories`,"rgba(99,102,241,0.15)","#818cf8"],
+                        [`📝 ${h.word_count}w`,             "rgba(6,182,212,0.12)","#22d3ee"],
+                        [`⏱️ ${h.reading_time}m`,           "rgba(139,92,246,0.12)","#a78bfa"],
+                        [h.mode==="hitl"?"🙋 HITL":"🤖 Auto","rgba(52,211,153,0.1)","#34d399"],
+                      ].map(([label,bg,color],j)=>(
+                        <span key={j} style={{fontSize:10,padding:"2px 7px",borderRadius:20,
+                          background:bg,color,fontWeight:500}}>{label}</span>
+                      ))}
+                    </div>
+                    <div style={{fontSize:10,color:"#1e293b"}}>
+                      🕐 {new Date(h.timestamp).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+      </div>{/* end body */}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
