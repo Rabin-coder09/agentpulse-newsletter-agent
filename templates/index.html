@@ -26,7 +26,7 @@
 <div id="root" style="height:100%;display:flex;flex-direction:column;"></div>
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
-const API = "http://localhost:8000";
+const API = window.location.origin;
 
 const TOPICS = [
   { label:"🤖 AI Agents",      goal:"Create a weekly newsletter on latest AI agent news and send it to our subscribers." },
