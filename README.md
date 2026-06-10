@@ -274,4 +274,3 @@ The agent pipeline takes 60-120 seconds. Running it as a background job with pol
 ## 👤 Author
 
 Built as part of AI Developer Internship Assignment  
-Submission Deadline: June 10, 2026
