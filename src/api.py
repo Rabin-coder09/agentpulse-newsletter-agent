@@ -101,6 +101,12 @@ async def serve_ui():
         os.path.join(os.path.dirname(__file__), "..", "templates", "index.html")
     )
 
+from fastapi.responses import RedirectResponse
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/ui")
+
 @app.post("/run", response_model=JobStatus)
 async def run_agent(req: AgentRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())[:8]
